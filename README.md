@@ -135,6 +135,7 @@ node test-headless.js    # 无头冒烟测试:模拟 600 秒游戏逻辑
 ```
 SYNTAX OK
 SMOKE OK: 600s 模拟无异常
+SAVE OK: 自动存档已写入 localStorage
 ```
 
 **教学讲解:** `test-headless.js` 用「桩(Stub)」替代 DOM 与 Canvas 接口,让游戏代码脱离浏览器也能跑通主循环。这是测试 UI 密集型代码的常见思路——**把副作用关进笼子,只验证逻辑**。
