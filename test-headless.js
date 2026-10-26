@@ -37,6 +37,12 @@ global.document = {
   createElement() { return makeEl(); },
 };
 global.window = {};
+global.localStorage = {
+  _d: {},
+  getItem(k) { return Object.prototype.hasOwnProperty.call(this._d, k) ? this._d[k] : null; },
+  setItem(k, v) { this._d[k] = String(v); },
+  removeItem(k) { delete this._d[k]; },
+};
 global.innerWidth = 1280;
 global.innerHeight = 720;
 global.addEventListener = () => {};
@@ -56,4 +62,5 @@ for (let i = 0; i < 600 * 60; i++) {
   cb(ts);
   if (!rafCb) { console.error('FAIL: rAF 链断开 @' + i); process.exit(1); }
 }
-console.log('SMOKE OK: 600s 模拟无异常');
+console.log('SMOKE OK: 600s 模拟无异常');if (!global.localStorage.getItem('pixel_save_v1')) { console.error('FAIL: 自动存档未写入 localStorage'); process.exit(1); }
+console.log('SAVE OK: 自动存档已写入 localStorage');

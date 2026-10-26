@@ -10,8 +10,8 @@ const DAY_LEN = 210, NIGHT_LEN = 150;
 const REACH = 4.8;
 
 const T = { AIR:0, GRASS:1, DIRT:2, STONE:3, BEDROCK:4, TREE:5, LEAF:6,
-            COAL:7, IRON:8, GOLD:9, TORCH:10, BENCH:11, WOOD:12 };
-const SOLID = new Set([T.GRASS, T.DIRT, T.STONE, T.BEDROCK, T.COAL, T.IRON, T.GOLD, T.WOOD]);
+            COAL:7, IRON:8, GOLD:9, TORCH:10, BENCH:11, WOOD:12, CRYSTAL:13, WATER:14 };
+const SOLID = new Set([T.GRASS, T.DIRT, T.STONE, T.BEDROCK, T.COAL, T.IRON, T.GOLD, T.WOOD, T.CRYSTAL]);
 
 const TILEINFO = {
   [T.GRASS]:  { hard:0.40, tier:0, drop:'dirt'  },
@@ -20,6 +20,7 @@ const TILEINFO = {
   [T.COAL]:   { hard:0.90, tier:1, drop:'coal'  },
   [T.IRON]:   { hard:1.10, tier:2, drop:'iron'  },
   [T.GOLD]:   { hard:1.30, tier:3, drop:'gold'  },
+  [T.CRYSTAL]:{ hard:1.60, tier:4, drop:'crystal' },
   [T.TREE]:   { hard:0.50, tier:0, drop:'wood'  },
   [T.LEAF]:   { hard:0.08, tier:0, drop:null    },
   [T.WOOD]:   { hard:0.50, tier:0, drop:'wood'  },
@@ -37,6 +38,7 @@ const ITEMS = {
   coal:  { name:'煤矿',   kind:'mat',   col:'#3a3a42' },
   iron:  { name:'铁矿',   kind:'mat',   col:'#c78a5e' },
   gold:  { name:'金矿',   kind:'mat',   col:'#f2c84b' },
+  crystal: { name:'水晶', kind:'mat',   col:'#c77dff' },
   wood_pick:  { name:'木镐', kind:'pick', tier:1, speed:1.0, col:'#b98a55' },
   stone_pick: { name:'石镐', kind:'pick', tier:2, speed:1.6, col:'#9a9aa2' },
   iron_pick:  { name:'铁镐', kind:'pick', tier:3, speed:2.3, col:'#d8d8e0' },
@@ -45,6 +47,7 @@ const ITEMS = {
   stone_sword: { name:'石剑', kind:'sword', dmg:12, col:'#9a9aa2' },
   iron_sword:  { name:'铁剑', kind:'sword', dmg:18, col:'#d8d8e0' },
   gold_sword:  { name:'金剑', kind:'sword', dmg:26, col:'#f2c84b' },
+  crystal_sword: { name:'水晶剑', kind:'sword', dmg:35, col:'#c77dff' },
 };
 
 const RECIPES = [
@@ -58,6 +61,7 @@ const RECIPES = [
   { out:'stone_sword', n:1, req:{ wood:4, stone:12 },    station:true },
   { out:'iron_sword',  n:1, req:{ wood:4, iron:10 },     station:true },
   { out:'gold_sword',  n:1, req:{ wood:4, gold:10 },     station:true },
+  { out:'crystal_sword', n:1, req:{ crystal:8, gold:5 },  station:true },
 ];
 
 // ---------- 随机数 & 噪声 ----------
@@ -85,6 +89,14 @@ function fbm2(x, y) { return noise2(x, y) * 0.65 + noise2(x * 2.3 + 31, y * 2.3 
 
 // ---------- 世界 ----------
 const world = new Uint8Array(W * H);
+const texRand = new Float32Array(W * H * 2);
+function buildTexRand() {
+  for (let ty = 0; ty < H; ty++) for (let tx = 0; tx < W; tx++) {
+    const i2 = (ty * W + tx) * 2;
+    texRand[i2] = hash2(tx * 3 + 11, ty * 5 + 7);
+    texRand[i2 + 1] = hash2(tx * 7 + 3, ty * 13 + 1);
+  }
+}
 const topSolid = new Int16Array(W);
 const surf = new Int16Array(W);
 const idx = (x, y) => y * W + x;
@@ -134,6 +146,36 @@ function genWorld(seed) {
   veins(T.COAL, 170, 8, 26, 3, 8);
   veins(T.IRON, 120, 18, 62, 3, 7);
   veins(T.GOLD, 70, 55, H - 4, 2, 6);
+  veins(T.CRYSTAL, 26, 95, H - 5, 2, 4);
+  // 水体:在明显低洼的山谷生成水潭
+  for (let x = 4; x < W - 4; x++) {
+    const left = Math.min(surf[x - 4], surf[x - 3], surf[x - 2], surf[x - 1]);
+    const right = Math.min(surf[x + 1], surf[x + 2], surf[x + 3], surf[x + 4]);
+    const rim = Math.min(left, right);
+    if (rim - surf[x] > 3) {
+      const wl = rim - 1;
+      for (let y = surf[x] - 1; y >= Math.max(2, wl); y--) {
+        if (getT(x, y) === T.AIR) setT(x, y, T.WATER);
+      }
+    }
+  }
+  // 主动开凿 6~10 个水潭,保证地图上总有水
+  const ponds = 6 + Math.floor(hash1(777) * 5);
+  for (let p = 0; p < ponds; p++) {
+    const cx = 8 + Math.floor(hash1(p * 91 + 555) * (W - 16));
+    const pw = 3 + Math.floor(hash1(p * 37 + 21) * 5);
+    const depth = 2 + Math.floor(hash1(p * 53 + 7) * 3);
+    for (let dx = -pw; dx <= pw; dx++) {
+      const x = cx + dx;
+      if (x < 2 || x > W - 3) continue;
+      const sy = surf[x];
+      for (let d = 0; d < depth; d++) {
+        const yy = sy + d;
+        if (yy < H - 1 && getT(x, yy) !== T.BEDROCK) setT(x, yy, T.AIR);
+      }
+      for (let yy = sy + depth - 1; yy >= Math.max(2, sy - 1); yy--) setT(x, yy, T.WATER);
+    }
+  }
   let lastTree = -6;
   for (let x = 5; x < W - 5; x++) {
     if (getT(x, surf[x]) !== T.GRASS) continue;
@@ -151,6 +193,7 @@ function genWorld(seed) {
     }
   }
   for (let x = 0; x < W; x++) recomputeTopCol(x);
+  buildTexRand();
 }
 
 // ---------- 玩家 / 实体 ----------
@@ -159,8 +202,11 @@ const player = {
   onGround: false, blockX: false, face: 1,
   hp: 100, maxhp: 100, invuln: 0, lastHurt: -99,
   walkPhase: 0, action: 0, atkCd: 0, dead: false,
+  breath: 10, maxBreath: 10, drownT: 0, inWater: false,
 };
 let zombies = [];
+let skeletons = [];
+let arrows = [];
 let particles = [];
 let coins = 0;
 let spawnX = 0, spawnY = 0;
@@ -194,7 +240,7 @@ function removeItem(id, n) {
 }
 
 // ---------- 时间 ----------
-let gameTime = 0, dayCount = 1, zspawnT = 2;
+let gameTime = 0, dayCount = 1, zspawnT = 2, sspawnT = 4;
 function cyclePos() { return gameTime % (DAY_LEN + NIGHT_LEN); }
 function skyBrightness() {
   const t = cyclePos(), tr = 14;
@@ -215,7 +261,9 @@ function collides(x, y, w, h) {
   return false;
 }
 function moveEntity(e, dt) {
-  e.vy = Math.min(MAXFALL, e.vy + GRAV * dt);
+  const grav = e.inWater ? GRAV * 0.22 : GRAV;
+  const maxFall = e.inWater ? 6 : MAXFALL;
+  e.vy = Math.min(maxFall, e.vy + grav * dt);
   let nx = e.x + e.vx * dt;
   e.blockX = false;
   if (e.vx > 0) {
@@ -315,6 +363,7 @@ addEventListener('keydown', e => {
   if (e.code === 'Tab') e.preventDefault();
   if (e.code === 'KeyE' || e.code === 'Tab') togglePanel();
   if (e.code === 'KeyH') toggleHelp();
+  if (e.code === 'F3') { e.preventDefault(); fpsShow = !fpsShow; }
   if (e.code.startsWith('Digit')) {
     const d = parseInt(e.code.slice(5), 10);
     sel = d === 0 ? 9 : d - 1;
@@ -388,7 +437,7 @@ function handleMouse(dt) {
     if (!info.anyTool && !isPick) { hint('需要一把镐来挖掘(按 E 打开合成)'); mineProg = 0; return; }
     const tier = isPick ? held.tier : 0;
     if (tier < info.tier) {
-      hint(info.tier === 1 ? '至少需要一把木镐' : info.tier === 2 ? '需要石镐或更好的镐' : '需要铁镐或更好的镐');
+      hint(info.tier === 1 ? '至少需要一把木镐' : info.tier === 2 ? '需要石镐或更好的镐' : info.tier === 3 ? '需要铁镐或更好的镐' : '需要金镐才能挖掘水晶');
       mineProg = 0; return;
     }
     const k = idx(tx, ty);
@@ -423,7 +472,8 @@ function breakTile(tx, ty, t) {
 }
 
 function placeBlock(tx, ty, id) {
-  if (getT(tx, ty) !== T.AIR) return;
+  const cur = getT(tx, ty);
+  if (cur !== T.AIR && cur !== T.WATER) return;
   const it = ITEMS[id];
   if (SOLID.has(it.tile) && rectsOverlap({ x: tx, y: ty, w: 1, h: 1 }, player)) return;
   // 需与已有方块相邻(防止凭空悬空放置体验过差?——泰拉瑞亚允许任意放置,这里放宽:仅检查背包数量)
@@ -440,7 +490,7 @@ function attack(item) {
   sfx('swing');
   player.action = 0.22;
   const pcx = player.x + player.w / 2, pcy = player.y + player.h / 2;
-  for (const z of zombies) {
+  for (const z of zombies.concat(skeletons)) {
     if (z.hp <= 0) continue;
     const zx = z.x + z.w / 2, zy = z.y + z.h / 2;
     const d = Math.hypot(zx - pcx, zy - pcy);
@@ -450,9 +500,9 @@ function attack(item) {
       z.hurtT = 0.3;
       z.vx = player.face * 9;
       z.vy = -6;
-      burst(zx, zy, '#7fae4c', 8, 5);
+      burst(zx, zy, z.bone ? '#e8e8d0' : '#7fae4c', 8, 5);
       sfx('zhit');
-      if (z.hp <= 0) killZombie(z);
+      if (z.hp <= 0) { if (z.bone) killSkeleton(z); else killZombie(z); }
     }
   }
 }
@@ -469,6 +519,14 @@ function killZombie(z) {
   }
 }
 
+function die(cause) {
+  player.hp = 0;
+  player.dead = true;
+  document.getElementById('deathInfo').textContent =
+    '你在第 ' + dayCount + ' 天' + cause + ' · 金币 ' + coins;
+  document.getElementById('deathPanel').classList.remove('hidden');
+}
+
 function hurtPlayer(dmg, dir) {
   player.hp -= dmg;
   player.invuln = 1;
@@ -477,13 +535,27 @@ function hurtPlayer(dmg, dir) {
   player.vy = -8;
   burst(player.x + player.w / 2, player.y + player.h / 2, '#c0392b', 10, 5);
   sfx('hurt');
-  if (player.hp <= 0) {
-    player.hp = 0;
-    player.dead = true;
-    document.getElementById('deathInfo').textContent =
-      '你在第 ' + dayCount + ' 天被僵尸撕碎了 · 金币 ' + coins;
-    document.getElementById('deathPanel').classList.remove('hidden');
-  }
+  if (player.hp <= 0) die('被怪物撕碎了');
+}
+
+// ---------- 水体 ----------
+function isWater(x, y) { return getT(x, y) === T.WATER; }
+function playerInWater() {
+  const cx = Math.floor(player.x + player.w / 2);
+  const headY = Math.floor(player.y + 0.2);
+  const feetY = Math.floor(player.y + player.h - 0.1);
+  return isWater(cx, headY) || isWater(cx, feetY) ||
+         isWater(Math.floor(player.x + 0.1), feetY) || isWater(Math.floor(player.x + player.w - 0.1), feetY);
+}
+function headInWater() {
+  return isWater(Math.floor(player.x + player.w / 2), Math.floor(player.y + 0.2));
+}
+function drownDamage(dmg) {
+  player.hp -= dmg;
+  player.lastHurt = gameTime;
+  burst(player.x + player.w / 2, player.y + player.h / 2, '#4aa3ff', 8, 4);
+  sfx('hurt');
+  if (player.hp <= 0) die('溺水而亡');
 }
 
 // ---------- 僵尸 ----------
@@ -537,6 +609,110 @@ function updateZombies(dt) {
   zombies = zombies.filter(z => z.hp > 0);
 }
 
+// ---------- 骷髅弓箭手 ----------
+function spawnSkeleton() {
+  const dir = Math.random() < 0.5 ? -1 : 1;
+  const x = Math.floor(player.x + dir * (24 + Math.random() * 14));
+  if (x < 3 || x > W - 4) return;
+  const gy = topSolid[x];
+  if (gy >= H - 2) return;
+  const hp = 20 + dayCount * 3;
+  skeletons.push({
+    x: x + 0.1, y: gy - 1.9 - 0.01, w: 0.8, h: 1.9, vx: 0, vy: 0,
+    hp, maxhp: hp, face: -dir, hurtT: 0, walkPhase: Math.random() * 6,
+    onGround: false, blockX: false, bone: true, shootCd: 1.5 + Math.random() * 2,
+  });
+}
+
+function shootArrow(s) {
+  const sx = s.x + s.w / 2, sy = s.y + 0.9;
+  const tx = player.x + player.w / 2, ty = player.y + player.h / 2;
+  const dx = tx - sx, dy = ty - sy;
+  const dist = Math.hypot(dx, dy) || 1;
+  const spd = 17;
+  arrows.push({
+    x: sx, y: sy,
+    vx: dx / dist * spd,
+    vy: dy / dist * spd - 3.8,
+    life: 3,
+  });
+  sfx('swing');
+}
+
+function updateArrows(dt) {
+  for (const a of arrows) {
+    a.vy += 26 * dt;
+    a.x += a.vx * dt;
+    a.y += a.vy * dt;
+    a.life -= dt;
+    if (isSolid(Math.floor(a.x), Math.floor(a.y))) {
+      a.life = 0; burst(a.x, a.y, '#b98a55', 3, 2); continue;
+    }
+    if (!player.dead && player.invuln <= 0 &&
+        a.x > player.x && a.x < player.x + player.w &&
+        a.y > player.y && a.y < player.y + player.h) {
+      hurtPlayer(8, Math.sign(a.vx) || 1);
+      a.life = 0;
+    }
+  }
+  arrows = arrows.filter(a => a.life > 0);
+}
+
+function updateSkeletons(dt) {
+  const night = isNight();
+  if (!night) {
+    if (skeletons.length) {
+      for (const s of skeletons) burst(s.x + 0.4, s.y + 1, '#ff9a3d', 10, 4);
+      skeletons.length = 0;
+    }
+    arrows.length = 0;
+  } else {
+    sspawnT -= dt;
+    const cap = Math.min(6, 1 + Math.floor(dayCount / 2));
+    if (sspawnT <= 0 && skeletons.length < cap && !player.dead) {
+      spawnSkeleton();
+      sspawnT = 4 + Math.random() * 2.5;
+    }
+  }
+  for (const s of skeletons) {
+    if (s.hp <= 0) continue;
+    const scx = s.x + s.w / 2;
+    const dx = (player.x + player.w / 2) - scx;
+    const adx = Math.abs(dx);
+    if (adx < 32 && !player.dead) {
+      if (adx < 7) s.vx = -Math.sign(dx) * 2.7;
+      else if (adx > 9.5) s.vx = Math.sign(dx) * 2.7;
+      else s.vx = 0;
+      s.face = Math.sign(dx) || 1;
+      s.walkPhase += dt * 8;
+      s.shootCd -= dt;
+      if (s.shootCd <= 0 && adx > 2 && adx < 20) {
+        shootArrow(s);
+        s.shootCd = 3;
+      }
+    } else s.vx = 0;
+    if (s.blockX && s.onGround) s.vy = -15.5;
+    moveEntity(s, dt);
+    s.hurtT = Math.max(0, s.hurtT - dt);
+    if (!player.dead && player.invuln <= 0 && rectsOverlap(player, s)) {
+      hurtPlayer(6 + Math.min(8, dayCount), Math.sign(player.x - s.x) || 1);
+    }
+  }
+  skeletons = skeletons.filter(s => s.hp > 0);
+}
+
+function killSkeleton(s) {
+  s.hp = 0;
+  burst(s.x + s.w / 2, s.y + s.h / 2, '#e8e8d0', 18, 7);
+  coins += 2 + Math.floor(Math.random() * 5);
+  sfx('zdie');
+  if (Math.random() < 0.35) {
+    player.hp = Math.min(player.maxhp, player.hp + 15);
+    toast('拾取生命之心 +15 HP');
+    sfx('heart');
+  }
+}
+
 // ---------- 主更新 ----------
 function update(dt) {
   gameTime += dt;
@@ -544,14 +720,32 @@ function update(dt) {
   if (d !== dayCount) { dayCount = d; toast('☀ 第 ' + d + ' 天'); }
 
   if (!player.dead) {
+    player.inWater = playerInWater();
     let mx = 0;
     if (keys['KeyA'] || keys['ArrowLeft']) mx -= 1;
     if (keys['KeyD'] || keys['ArrowRight']) mx += 1;
-    player.vx = mx * 5.4;
+    player.vx = mx * (player.inWater ? 3.0 : 5.4);
     if (mx !== 0) { player.face = mx; player.walkPhase += dt * 11; }
-    if ((keys['Space'] || keys['KeyW'] || keys['ArrowUp']) && player.onGround) {
-      player.vy = -18.5;
-      sfx('jump');
+    if (keys['Space'] || keys['KeyW'] || keys['ArrowUp']) {
+      if (player.inWater) {
+        player.vy = -6.5;
+        if (Math.random() < dt * 5) sfx('dig');
+      } else if (player.onGround) {
+        player.vy = -18.5;
+        sfx('jump');
+      }
+    }
+    // 氧气
+    if (headInWater()) {
+      player.breath -= dt;
+      if (player.breath <= 0) {
+        player.breath = 0;
+        player.drownT -= dt;
+        if (player.drownT <= 0) { drownDamage(5); player.drownT = 0.8; }
+      }
+    } else {
+      player.breath = Math.min(player.maxBreath, player.breath + dt * 2.5);
+      player.drownT = 0;
     }
     player.atkCd = Math.max(0, player.atkCd - dt);
     player.invuln = Math.max(0, player.invuln - dt);
@@ -563,7 +757,11 @@ function update(dt) {
     handleMouse(dt);
   }
   updateZombies(dt);
+  updateSkeletons(dt);
+  updateArrows(dt);
   updateParticles(dt);
+  saveT += dt;
+  if (saveT >= 30) { saveT = 0; saveGame(); }
 }
 
 // ---------- 渲染 ----------
@@ -593,6 +791,7 @@ function tileColor(t) {
     case T.COAL: return '#3a3a42';
     case T.IRON: return '#c78a5e';
     case T.GOLD: return '#f2c84b';
+    case T.CRYSTAL: return '#c77dff';
     case T.TREE: return '#7a4f2a';
     case T.LEAF: return '#3f7d33';
     case T.WOOD: return '#a0723f';
@@ -672,8 +871,8 @@ function drawHillLayer(b, par, day, night, baseY, amp, off) {
 
 function drawTile(tx, ty, t) {
   const x = tx * TILE, y = ty * TILE;
-  const h1 = hash2(tx * 3 + 11, ty * 5 + 7);
-  const h2 = hash2(tx * 7 + 3, ty * 13 + 1);
+  const i2 = (ty * W + tx) * 2;
+  const h1 = texRand[i2], h2 = texRand[i2 + 1];
   switch (t) {
     case T.GRASS:
     case T.DIRT: {
@@ -696,14 +895,15 @@ function drawTile(tx, ty, t) {
     case T.STONE:
     case T.COAL:
     case T.IRON:
-    case T.GOLD: {
+    case T.GOLD:
+    case T.CRYSTAL: {
       ctx.fillStyle = h1 < 0.5 ? '#8a8a90' : '#84848b';
       ctx.fillRect(x, y, TILE, TILE);
       ctx.fillStyle = '#74747c';
       ctx.fillRect(x + 2 + Math.floor(h1 * 9), y + 3 + Math.floor(h2 * 8), 3, 3);
       ctx.fillRect(x + 10, y + 10 + Math.floor(h1 * 3), 2, 2);
       if (t !== T.STONE) {
-        const oc = t === T.COAL ? '#2b2b31' : t === T.IRON ? '#d28a5c' : '#f2c84b';
+        const oc = t === T.COAL ? '#2b2b31' : t === T.IRON ? '#d28a5c' : t === T.CRYSTAL ? '#c77dff' : '#f2c84b';
         ctx.fillStyle = oc;
         ctx.fillRect(x + 3 + Math.floor(h1 * 6), y + 3 + Math.floor(h2 * 5), 3, 3);
         ctx.fillRect(x + 9 + Math.floor(h2 * 4), y + 8 + Math.floor(h1 * 5), 3, 2);
@@ -754,6 +954,14 @@ function drawTile(tx, ty, t) {
       ctx.fillStyle = '#b9854f';
       ctx.fillRect(x, y + 4, TILE, 1.5);
       break;
+    case T.WATER: {
+      const wave = Math.sin(gameTime * 3 + tx * 0.8) * 1.2;
+      ctx.fillStyle = 'rgba(40,90,200,0.78)';
+      ctx.fillRect(x, y + 4 + wave, TILE, TILE - 4 - wave);
+      ctx.fillStyle = 'rgba(130,180,255,0.55)';
+      ctx.fillRect(x, y + 4 + wave, TILE, 2);
+      break;
+    }
     case T.BEDROCK:
       ctx.fillStyle = h1 < 0.5 ? '#3a3a40' : '#34343a';
       ctx.fillRect(x, y, TILE, TILE);
@@ -774,9 +982,18 @@ function drawHumanoid(x, y, w, h, opt) {
   // 身体
   ctx.fillStyle = opt.shirt;
   ctx.fillRect(px + 1, py + 11, w * TILE - 2, h * TILE - 20);
-  // 手臂(僵尸前伸)
+  // 手臂(僵尸前伸 / 骷髅持弓)
   ctx.fillStyle = opt.skin;
-  if (opt.zombie) {
+  if (opt.skeleton) {
+    const ax = px + (opt.face > 0 ? w * TILE - 1 : -6);
+    ctx.fillRect(ax, py + 13, 7, 3);
+    // 弓
+    ctx.strokeStyle = '#8a5f33';
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.arc(ax + (opt.face > 0 ? 7 : 0), py + 14, 5, -1.25, 1.25);
+    ctx.stroke();
+  } else if (opt.zombie) {
     ctx.fillRect(px + (opt.face > 0 ? w * TILE - 1 : -6), py + 13, 7, 3);
   } else {
     ctx.fillRect(px - 1, py + 12, 3, 8);
@@ -786,7 +1003,11 @@ function drawHumanoid(x, y, w, h, opt) {
   ctx.fillStyle = opt.skin;
   ctx.fillRect(px + 1.5, py, w * TILE - 3, 10);
   // 头发 / 眼睛
-  if (opt.zombie) {
+  if (opt.skeleton) {
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(px + (opt.face > 0 ? w * TILE - 5.5 : 3), py + 4, 2.5, 3);
+    ctx.fillRect(px + (opt.face > 0 ? w * TILE - 9 : 6), py + 4, 2.5, 3);
+  } else if (opt.zombie) {
     ctx.fillStyle = '#3a5a28';
     ctx.fillRect(px + 1.5, py, w * TILE - 3, 3);
     ctx.fillStyle = '#ff4040';
@@ -843,6 +1064,34 @@ function drawEntities() {
       ctx.fillRect(zx + 1, zy + 1, 20 * Math.max(0, z.hp / z.maxhp), 2);
     }
   }
+  // 骷髅
+  for (const s of skeletons) {
+    if (s.hurtT > 0 && Math.floor(gameTime * 20) % 2 === 0) ctx.globalAlpha = 0.5;
+    drawHumanoid(s.x, s.y, s.w, s.h, {
+      skin: '#e8e8d8', shirt: '#c9c9b8', pants: '#b5b5a4',
+      face: s.face, phase: s.walkPhase, moving: Math.abs(s.vx) > 0.1,
+      zombie: false, skeleton: true,
+    });
+    ctx.globalAlpha = 1;
+    if (s.hp < s.maxhp) {
+      const sx = s.x * TILE - 3, sy = s.y * TILE - 8;
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(sx, sy, 22, 4);
+      ctx.fillStyle = '#d84040';
+      ctx.fillRect(sx + 1, sy + 1, 20 * Math.max(0, s.hp / s.maxhp), 2);
+    }
+  }
+  // 箭矢
+  for (const a of arrows) {
+    ctx.save();
+    ctx.translate(a.x * TILE, a.y * TILE);
+    ctx.rotate(Math.atan2(a.vy, a.vx));
+    ctx.fillStyle = '#b98a55';
+    ctx.fillRect(-4, -1, 9, 2);
+    ctx.fillStyle = '#e8e8e0';
+    ctx.fillRect(3, -1.5, 3, 3);
+    ctx.restore();
+  }
   if (!player.dead) {
     const blink = player.invuln > 0 && Math.floor(gameTime * 12) % 2 === 0;
     if (!blink) {
@@ -868,6 +1117,13 @@ function drawParticles() {
 
 // ---------- 光照 ----------
 const lightMap = new Float32Array(4096);
+const darkCols = [];
+for (let i = 0; i <= 64; i++) darkCols[i] = 'rgba(3,5,16,' + (i / 64 * 0.93).toFixed(3) + ')';
+const torchGlow = new Float32Array(17 * 17);
+for (let gy = 0; gy < 17; gy++) for (let gx = 0; gx < 17; gx++) {
+  const dx = gx - 8, dy = gy - 8, d = Math.sqrt(dx * dx + dy * dy);
+  torchGlow[gy * 17 + gx] = d > 8 ? 0 : (1 - d / 8) * 1.05;
+}
 function drawDarkness(b, x0, y0, x1, y1) {
   const rw = x1 - x0 + 1, rh = y1 - y0 + 1;
   if (rw * rh > lightMap.length) return;
@@ -881,14 +1137,15 @@ function drawDarkness(b, x0, y0, x1, y1) {
   for (let ty = y0; ty <= y1; ty++) {
     for (let tx = x0; tx <= x1; tx++) {
       if (getT(tx, ty) !== T.TORCH) continue;
-      const R = 8;
-      for (let dy = -R; dy <= R; dy++) {
-        for (let dx = -R; dx <= R; dx++) {
-          const gx = tx + dx, gy = ty + dy;
-          if (gx < x0 || gx > x1 || gy < y0 || gy > y1) continue;
-          const d = Math.sqrt(dx * dx + dy * dy);
-          if (d > R) continue;
-          const v = (1 - d / R) * 1.05;
+      for (let dy = -8; dy <= 8; dy++) {
+        const gy = ty + dy;
+        if (gy < y0 || gy > y1) continue;
+        const glowRow = (dy + 8) * 17;
+        for (let dx = -8; dx <= 8; dx++) {
+          const gx = tx + dx;
+          if (gx < x0 || gx > x1) continue;
+          const v = torchGlow[glowRow + dx + 8];
+          if (v === 0) continue;
           const i = (gy - y0) * rw + (gx - x0);
           if (v > lightMap[i]) lightMap[i] = v;
         }
@@ -908,9 +1165,9 @@ function drawDarkness(b, x0, y0, x1, y1) {
   for (let ty = y0; ty <= y1; ty++) {
     for (let tx = x0; tx <= x1; tx++) {
       const L = Math.min(1, lightMap[(ty - y0) * rw + (tx - x0)]);
-      const a = (1 - L) * 0.93;
-      if (a > 0.02) {
-        ctx.fillStyle = 'rgba(3,5,16,' + a.toFixed(3) + ')';
+      const g = Math.round((1 - L) * 64);
+      if (g > 1) {
+        ctx.fillStyle = darkCols[g];
         ctx.fillRect(tx * TILE, ty * TILE, TILE, TILE);
       }
     }
@@ -1056,6 +1313,16 @@ function drawHUD(b) {
     const frac = Math.max(0, Math.min(1, (player.hp - i * 20) / 20));
     drawHeart(14 + i * 28, 12, frac);
   }
+  // 氧气条
+  if (player.breath < player.maxBreath) {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(12, 34, 108, 11);
+    ctx.fillStyle = '#4aa3ff';
+    ctx.fillRect(14, 36, 104 * Math.max(0, player.breath / player.maxBreath), 7);
+    ctx.strokeStyle = '#2a5a9a';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(12, 34, 108, 11);
+  }
   // 金币
   ctx.fillStyle = '#f2c84b';
   ctx.beginPath(); ctx.arc(22, 52, 7, 0, 6.29); ctx.fill();
@@ -1101,11 +1368,19 @@ function drawHUD(b) {
     ctx.fillText(String((i + 1) % 10), x + 3, by + 11);
   }
   // 夜间提示
-  if (isNight() && zombies.length > 0) {
+  if (isNight() && (zombies.length > 0 || skeletons.length > 0)) {
     ctx.textAlign = 'center';
     ctx.fillStyle = 'rgba(255,90,80,' + (0.6 + 0.4 * Math.sin(gameTime * 5)).toFixed(2) + ')';
     ctx.font = 'bold 14px "Microsoft YaHei",monospace';
-    ctx.fillText('⚠ 僵尸出没 · 数量 ' + zombies.length, cw / 2, 26);
+    ctx.fillText('⚠ 怪物出没 · 僵尸 ' + zombies.length + ' · 骷髅 ' + skeletons.length, cw / 2, 26);
+  }
+  if (fpsShow) {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(cw - 92, 46, 82, 24);
+    ctx.fillStyle = fpsValue >= 50 ? '#7dff8a' : '#ffb84a';
+    ctx.font = 'bold 14px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(fpsValue + ' FPS', cw - 16, 63);
   }
   ctx.textAlign = 'left';
 }
@@ -1232,6 +1507,7 @@ function toggleHelp() {
 
 // ---------- 主循环 ----------
 let lastT = 0, acc = 0;
+let fpsShow = false, fpsAcc = 0, fpsFrames = 0, fpsValue = 0;
 function loop(ts) {
   requestAnimationFrame(loop);
   if (!started) return;
@@ -1246,6 +1522,9 @@ function loop(ts) {
     acc -= step;
   }
   render();
+  fpsFrames++;
+  fpsAcc += dt;
+  if (fpsAcc >= 0.5) { fpsValue = Math.round(fpsFrames / fpsAcc); fpsFrames = 0; fpsAcc = 0; }
 }
 requestAnimationFrame(loop);
 
@@ -1258,7 +1537,91 @@ document.getElementById('reseed').addEventListener('click', () => {
   seedTextEl.textContent = seed;
 });
 
-function startGame() {
+// ---------- 存档 ----------
+const SAVE_KEY = 'pixel_save_v1';
+let saveT = 0;
+function rleEncode(arr) {
+  const out = [];
+  let i = 0;
+  while (i < arr.length) {
+    const v = arr[i];
+    let n = 1;
+    while (i + n < arr.length && arr[i + n] === v && n < 65535) n++;
+    out.push(v, n);
+    i += n;
+  }
+  return out;
+}
+function rleDecode(data, len) {
+  const out = new Uint8Array(len);
+  let o = 0;
+  for (let i = 0; i + 1 < data.length && o < len; i += 2) {
+    const v = data[i], n = data[i + 1];
+    out.fill(v, o, Math.min(len, o + n));
+    o += n;
+  }
+  return out;
+}
+function storageOk() {
+  try { return typeof localStorage !== 'undefined' && localStorage !== null; }
+  catch (e) { return false; }
+}
+function hasSave() {
+  if (!storageOk()) return false;
+  try { return !!localStorage.getItem(SAVE_KEY); } catch (e) { return false; }
+}
+function saveGame() {
+  if (!storageOk() || !started) return;
+  try {
+    localStorage.setItem(SAVE_KEY, JSON.stringify({
+      v: 1, seed,
+      world: rleEncode(world),
+      inv, coins, gameTime, dayCount,
+      spawnX, spawnY,
+      px: player.x, py: player.y, php: player.hp,
+    }));
+  } catch (e) { /* 存储失败忽略 */ }
+}
+function loadGame() {
+  if (!storageOk()) return false;
+  let d;
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return false;
+    d = JSON.parse(raw);
+  } catch (e) { return false; }
+  if (!d || d.v !== 1 || !d.world) return false;
+  seed = d.seed | 0;
+  SEED = seed;
+  seedTextEl.textContent = seed;
+  world.set(rleDecode(d.world, W * H));
+  for (let x = 0; x < W; x++) recomputeTopCol(x);
+  buildTexRand();
+  inv = (d.inv && d.inv.length === 30) ? d.inv : new Array(30).fill(null);
+  coins = d.coins | 0;
+  gameTime = d.gameTime || 0;
+  dayCount = d.dayCount || 1;
+  spawnX = d.spawnX; spawnY = d.spawnY;
+  player.x = d.px; player.y = d.py;
+  player.hp = d.php == null ? player.maxhp : d.php;
+  player.vx = 0; player.vy = 0; player.dead = false; player.invuln = 1;
+  zombies = []; skeletons = []; arrows = []; particles = [];
+  sel = 0;
+  return true;
+}
+
+function startGame(resume) {
+  if (resume && loadGame()) {
+    cam.x = player.x * TILE - canvas.width / ZOOM / 2;
+    cam.y = player.y * TILE - canvas.height / ZOOM / 2;
+    buildInvGrid();
+    refreshInvPanel();
+    started = true;
+    document.getElementById('startPanel').classList.add('hidden');
+    document.getElementById('deathPanel').classList.add('hidden');
+    toast('已读取存档,欢迎回来!');
+    return;
+  }
   genWorld(seed);
   // 出生点:世界中部
   spawnX = Math.floor(W / 2);
@@ -1268,6 +1631,8 @@ function startGame() {
   player.hp = player.maxhp;
   player.dead = false;
   zombies = [];
+  skeletons = [];
+  arrows = [];
   particles = [];
   coins = 0;
   gameTime = DAY_LEN * 0.15; // 从清晨开始
@@ -1286,9 +1651,13 @@ function startGame() {
   document.getElementById('startPanel').classList.add('hidden');
   document.getElementById('deathPanel').classList.add('hidden');
   toast('白天努力收集,夜晚活到最后!');
+  saveGame();
 }
 
-document.getElementById('startBtn').addEventListener('click', startGame);
+const continueBtnEl = document.getElementById('continueBtn');
+if (hasSave()) continueBtnEl.classList.remove('hidden');
+continueBtnEl.addEventListener('click', () => startGame(true));
+document.getElementById('startBtn').addEventListener('click', () => startGame(false));
 document.getElementById('respawnBtn').addEventListener('click', () => {
   player.x = spawnX + 0.1;
   player.y = spawnY;
